@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useCallback, useEffect } from "react";
+import { useRef, useCallback, useEffect, RefObject } from "react";
 import { useUpdateMyPresence, useMutation, useStorage } from "../liveblocks.config";
 import { LiveObject } from "@liveblocks/client";
 import { drawStrokes, drawLiveStroke, clearCanvas } from "@/lib/canvas/renderer";
@@ -16,7 +16,7 @@ interface UseCanvasOptions {
 }
 
 export function useCanvas(
-  canvasRef: React.RefObject<HTMLCanvasElement | null>,
+  canvasRef: RefObject<HTMLCanvasElement | null>,
   options: UseCanvasOptions
 ) {
   const { layerId, tool, color, strokeWidth, opacity } = options;
@@ -39,8 +39,8 @@ export function useCanvas(
     storage.get("strokes").push(new LiveObject(stroke));
   }, []);
 
-  // Redraw canvas whenever committed strokes or layers change.
-  useEffect(() => {
+  // Exposed so Canvas.tsx can call it after a resize clears the pixel buffer.
+  const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -48,6 +48,9 @@ export function useCanvas(
     clearCanvas(ctx, canvas.width, canvas.height);
     if (strokes && layers) drawStrokes(ctx, strokes, layers);
   }, [canvasRef, strokes, layers]);
+
+  // Redraw whenever Liveblocks storage changes.
+  useEffect(() => { redraw(); }, [redraw]);
 
   const getPoint = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>): Point => {
@@ -119,5 +122,5 @@ export function useCanvas(
     updatePresence({ cursor: null });
   }, [updatePresence]);
 
-  return { handleMouseDown, handleMouseMove, handleMouseUp, handleMouseLeave };
+  return { handleMouseDown, handleMouseMove, handleMouseUp, handleMouseLeave, redraw };
 }
