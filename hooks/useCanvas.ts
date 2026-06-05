@@ -25,13 +25,14 @@ export interface UseCanvasOptions {
   color: string;
   strokeWidth: number;
   opacity: number;
+  onLockedLayer?: () => void;
 }
 
 export function useCanvas(
   canvasRef: RefObject<HTMLCanvasElement | null>,
   options: UseCanvasOptions
 ) {
-  const { layerId, tool, color, strokeWidth, opacity } = options;
+  const { layerId, tool, color, strokeWidth, opacity, onLockedLayer } = options;
 
   // ── All live pointer data lives in refs, never in state ─────────────────
   const isDrawingRef = useRef(false);
@@ -146,7 +147,7 @@ export function useCanvas(
       lastPointerRef.current = point;
 
       if (tool === "pen") {
-        if (isActiveLocked()) return;
+        if (isActiveLocked()) { onLockedLayer?.(); return; }
         isDrawingRef.current = true;
         currentPointsRef.current = [point];
 
@@ -163,7 +164,7 @@ export function useCanvas(
         redraw();
       }
     },
-    [tool, getPoint, isActiveLocked, strokes, layers, updatePresence, redraw]
+    [tool, getPoint, isActiveLocked, strokes, layers, updatePresence, redraw, onLockedLayer]
   );
 
   // ── Pointer move ─────────────────────────────────────────────────────────

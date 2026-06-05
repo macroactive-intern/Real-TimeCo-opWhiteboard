@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useStorage, useUpdateMyPresence } from "../../liveblocks.config";
 import { exportStrokesToSvg, downloadSvg } from "@/lib/canvas/svgExport";
 import { useToolShortcuts } from "@/hooks/useToolShortcuts";
@@ -39,6 +39,19 @@ export default function Whiteboard() {
   // P / E / V tool shortcuts — same guard logic as other keyboard handlers.
   useToolShortcuts(handleToolChange);
 
+  // ── Locked-layer toast ────────────────────────────────────────────────────
+  const [showLockedWarning, setShowLockedWarning] = useState(false);
+  const lockedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleLockedLayer = useCallback(() => {
+    setShowLockedWarning(true);
+    if (lockedTimerRef.current) clearTimeout(lockedTimerRef.current);
+    lockedTimerRef.current = setTimeout(() => setShowLockedWarning(false), 2000);
+  }, []);
+
+  useEffect(() => () => { if (lockedTimerRef.current) clearTimeout(lockedTimerRef.current); }, []);
+  // ─────────────────────────────────────────────────────────────────────────
+
   const handleExportSvg = useCallback(() => {
     if (!strokes || !layers) return;
     const el = canvasAreaRef.current;
@@ -75,7 +88,21 @@ export default function Whiteboard() {
             color={color}
             strokeWidth={strokeWidth}
             opacity={opacity}
+            onLockedLayer={handleLockedLayer}
           />
+
+          {/* Locked-layer toast — absolutely positioned over the canvas */}
+          <div
+            className={`absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg
+              bg-amber-50 border border-amber-300 text-amber-800 text-sm font-medium
+              shadow-sm pointer-events-none select-none
+              transition-opacity duration-200
+              ${showLockedWarning ? "opacity-100" : "opacity-0"}`}
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            This layer is locked.
+          </div>
         </div>
 
         <div className="shrink-0 p-3 border-l border-zinc-200 bg-white overflow-y-auto">

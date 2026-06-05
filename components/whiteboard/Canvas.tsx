@@ -11,6 +11,7 @@ interface CanvasProps {
   color: string;
   strokeWidth: number;
   opacity: number;
+  onLockedLayer?: () => void;
 }
 
 const CURSOR: Record<ToolType, string> = {
@@ -25,6 +26,7 @@ export default function Canvas({
   color,
   strokeWidth,
   opacity,
+  onLockedLayer,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -35,7 +37,7 @@ export default function Canvas({
     handlePointerUp,
     handlePointerLeave,
     redraw,
-  } = useCanvas(canvasRef, { layerId, tool, color, strokeWidth, opacity });
+  } = useCanvas(canvasRef, { layerId, tool, color, strokeWidth, opacity, onLockedLayer });
 
   // Sync canvas pixel dimensions to the container on first paint.
   // Without this the canvas starts at 0×0 and clears itself before
