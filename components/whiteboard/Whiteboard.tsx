@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from "react";
 import { useStorage, useUpdateMyPresence } from "../../liveblocks.config";
 import { exportStrokesToSvg, downloadSvg } from "@/lib/canvas/svgExport";
 import { useToolShortcuts } from "@/hooks/useToolShortcuts";
@@ -8,6 +8,7 @@ import Canvas from "./Canvas";
 import Toolbar from "./Toolbar";
 import LayerPanel from "./LayerPanel";
 import UserList from "./UserList";
+import Minimap from "./Minimap";
 import type { Layer, Stroke, ToolType } from "@/types/whiteboard";
 
 export default function Whiteboard() {
@@ -17,8 +18,27 @@ export default function Whiteboard() {
   const [opacity, setOpacity] = useState(1);
   const [activeLayerId, setActiveLayerId] = useState("default");
 
-  // Used to read pixel dimensions at export time without needing a prop tunnel.
+  // Used to read pixel dimensions at export time and to drive the Minimap.
   const canvasAreaRef = useRef<HTMLDivElement>(null);
+  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
+
+  // Sync canvas area dimensions so Minimap can scale correctly.
+  useLayoutEffect(() => {
+    const el = canvasAreaRef.current;
+    if (!el) return;
+    setCanvasSize({ w: el.clientWidth, h: el.clientHeight });
+  }, []);
+
+  useEffect(() => {
+    const el = canvasAreaRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setCanvasSize({ w: Math.floor(width), h: Math.floor(height) });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const updatePresence = useUpdateMyPresence();
 
@@ -90,6 +110,8 @@ export default function Whiteboard() {
             opacity={opacity}
             onLockedLayer={handleLockedLayer}
           />
+
+          <Minimap canvasWidth={canvasSize.w} canvasHeight={canvasSize.h} />
 
           {/* Locked-layer toast — absolutely positioned over the canvas */}
           <div

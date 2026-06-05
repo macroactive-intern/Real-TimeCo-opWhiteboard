@@ -26,6 +26,16 @@ export function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke): void 
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
+  // Rectangles: draw with straight lineTo to keep sharp corners.
+  if (stroke.shapeType === "rect") {
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
   ctx.beginPath();
 
   if (points.length === 1) {
@@ -49,6 +59,30 @@ export function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke): void 
   const last = points[points.length - 1];
   ctx.lineTo(last.x, last.y);
   ctx.stroke();
+  ctx.restore();
+}
+
+// Draws a live rectangle preview from two corner points.
+export function drawLiveRect(
+  ctx: CanvasRenderingContext2D,
+  start: Point,
+  end: Point,
+  color: string,
+  width: number,
+  opacity: number
+): void {
+  const x = Math.min(start.x, end.x);
+  const y = Math.min(start.y, end.y);
+  const w = Math.abs(end.x - start.x);
+  const h = Math.abs(end.y - start.y);
+  if (w < 1 && h < 1) return;
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeRect(x, y, w, h);
   ctx.restore();
 }
 

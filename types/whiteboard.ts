@@ -17,6 +17,7 @@ export interface Stroke {
   opacity: number;
   points: Point[];
   createdAt: number;
+  shapeType?: "rect";
   [key: string]: Json | undefined;
 }
 

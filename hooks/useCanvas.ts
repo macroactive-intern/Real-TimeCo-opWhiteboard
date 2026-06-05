@@ -8,6 +8,7 @@ import {
   clearCanvas,
   drawStrokes,
   drawLiveStroke,
+  drawLiveRect,
   drawSelectionBox,
 } from "@/lib/canvas/renderer";
 import {
@@ -184,7 +185,16 @@ export function useCanvas(
         // Local preview — zero Liveblocks writes here.
         clearCanvas(ctx, canvas.width, canvas.height);
         if (strokes && layers) drawStrokes(ctx, strokes, layers);
-        drawLiveStroke(ctx, currentPointsRef.current, color, strokeWidth, opacity);
+        const start = currentPointsRef.current[0];
+        if (e.altKey) {
+          // Alt: live rectangle preview from start to current point.
+          drawLiveRect(ctx, start, point, color, strokeWidth, opacity);
+        } else if (e.shiftKey) {
+          // Shift: straight-line preview from start to current point.
+          drawLiveStroke(ctx, [start, point], color, strokeWidth, opacity);
+        } else {
+          drawLiveStroke(ctx, currentPointsRef.current, color, strokeWidth, opacity);
+        }
 
       } else if (tool === "eraser") {
         if (!isDrawingRef.current || !ctx || !canvas) return;
@@ -229,17 +239,43 @@ export function useCanvas(
         const points = [...currentPointsRef.current];
         currentPointsRef.current = [];
         if (points.length < 2) return;
-        // Single write to Liveblocks for the entire stroke.
-        commitStroke({
-          id: nanoid(),
-          userId: "",
-          layerId,
-          color,
-          width: strokeWidth,
-          opacity,
-          points,
-          createdAt: Date.now(),
-        });
+        const start = points[0];
+
+        if (e.altKey) {
+          // Commit as axis-aligned rectangle.
+          const x1 = Math.min(start.x, point.x);
+          const y1 = Math.min(start.y, point.y);
+          const x2 = Math.max(start.x, point.x);
+          const y2 = Math.max(start.y, point.y);
+          if (x2 - x1 < 2 && y2 - y1 < 2) return;
+          commitStroke({
+            id: nanoid(), userId: "", layerId, color,
+            width: strokeWidth, opacity,
+            points: [
+              { x: x1, y: y1 }, { x: x2, y: y1 },
+              { x: x2, y: y2 }, { x: x1, y: y2 },
+              { x: x1, y: y1 },
+            ],
+            shapeType: "rect",
+            createdAt: Date.now(),
+          });
+        } else if (e.shiftKey) {
+          // Commit as straight line from first recorded point to release point.
+          commitStroke({
+            id: nanoid(), userId: "", layerId, color,
+            width: strokeWidth, opacity,
+            points: [start, point],
+            createdAt: Date.now(),
+          });
+        } else {
+          // Single write to Liveblocks for the entire freehand stroke.
+          commitStroke({
+            id: nanoid(), userId: "", layerId, color,
+            width: strokeWidth, opacity,
+            points,
+            createdAt: Date.now(),
+          });
+        }
 
       } else if (tool === "eraser") {
         if (!isDrawingRef.current) return;
