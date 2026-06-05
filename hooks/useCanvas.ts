@@ -4,7 +4,7 @@ import { useRef, useCallback, useEffect } from "react";
 import { useUpdateMyPresence, useMutation, useStorage } from "../liveblocks.config";
 import { LiveObject } from "@liveblocks/client";
 import { drawStrokes, drawLiveStroke, clearCanvas } from "@/lib/canvas/renderer";
-import type { Point, Stroke, ToolType } from "@/types/whiteboard";
+import type { Layer, Point, Stroke, ToolType } from "@/types/whiteboard";
 import { nanoid } from "@liveblocks/client";
 
 interface UseCanvasOptions {
@@ -27,24 +27,27 @@ export function useCanvas(
 
   const updatePresence = useUpdateMyPresence();
 
-  // useStorage returns a readonly snapshot. The shape is identical to Stroke[] so the cast is safe.
-  const strokes = useStorage((root) =>
-    [...root.strokes].filter((s) => s.layerId === layerId) as unknown as Stroke[]
+  // useStorage returns a readonly snapshot. Casts are safe — shapes are identical.
+  const strokes = useStorage(
+    (root) => [...root.strokes] as unknown as Stroke[]
+  );
+  const layers = useStorage(
+    (root) => [...root.layers] as unknown as Layer[]
   );
 
   const commitStroke = useMutation(({ storage }, stroke: Stroke) => {
     storage.get("strokes").push(new LiveObject(stroke));
   }, []);
 
-  // Redraw canvas whenever committed strokes change.
+  // Redraw canvas whenever committed strokes or layers change.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    clearCanvas(ctx);
-    if (strokes) drawStrokes(ctx, strokes);
-  }, [canvasRef, strokes]);
+    clearCanvas(ctx, canvas.width, canvas.height);
+    if (strokes && layers) drawStrokes(ctx, strokes, layers);
+  }, [canvasRef, strokes, layers]);
 
   const getPoint = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>): Point => {
@@ -68,11 +71,11 @@ export function useCanvas(
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      clearCanvas(ctx);
-      if (strokes) drawStrokes(ctx, strokes);
+      clearCanvas(ctx, canvas.width, canvas.height);
+      if (strokes && layers) drawStrokes(ctx, strokes, layers);
       drawLiveStroke(ctx, currentPoints.current, color, strokeWidth, opacity);
     },
-    [getPoint, updatePresence, tool, canvasRef, strokes, color, strokeWidth, opacity]
+    [getPoint, updatePresence, tool, canvasRef, strokes, layers, color, strokeWidth, opacity]
   );
 
   const handleMouseDown = useCallback(
