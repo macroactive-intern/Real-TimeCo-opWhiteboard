@@ -1,13 +1,24 @@
 "use client";
 
-import { useRef, useCallback, useEffect, RefObject } from "react";
+import { useRef, useCallback, useEffect, useLayoutEffect, RefObject } from "react";
 import { useUpdateMyPresence, useMutation, useStorage } from "../liveblocks.config";
 import { LiveObject } from "@liveblocks/client";
-import { drawStrokes, drawLiveStroke, clearCanvas } from "@/lib/canvas/renderer";
+import {
+  clearCanvas,
+  drawStrokes,
+  drawLiveStroke,
+  drawSelectionBox,
+} from "@/lib/canvas/renderer";
+import {
+  findStrokeAtPoint,
+  getPathBoundingBox,
+  getStrokeBoundingBox,
+  doesBoundingBoxIntersect,
+} from "@/lib/canvas/geometry";
 import type { Layer, Point, Stroke, ToolType } from "@/types/whiteboard";
 import { nanoid } from "@liveblocks/client";
 
-interface UseCanvasOptions {
+export interface UseCanvasOptions {
   layerId: string;
   tool: ToolType;
   color: string;
@@ -21,106 +32,263 @@ export function useCanvas(
 ) {
   const { layerId, tool, color, strokeWidth, opacity } = options;
 
-  // Live drawing state stays in refs — never written to Liveblocks during mousemove.
-  const isDrawing = useRef(false);
-  const currentPoints = useRef<Point[]>([]);
+  // ── All live pointer data lives in refs, never in state ─────────────────
+  const isDrawingRef = useRef(false);
+  const currentPointsRef = useRef<Point[]>([]);
+  const lastPointerRef = useRef<Point | null>(null);
+  const selectedStrokeRef = useRef<Stroke | null>(null);
+  const dragStartRef = useRef<Point | null>(null);
+  const eraserPointsRef = useRef<Point[]>([]);
 
   const updatePresence = useUpdateMyPresence();
 
-  // useStorage returns a readonly snapshot. Casts are safe — shapes are identical.
-  const strokes = useStorage(
-    (root) => [...root.strokes] as unknown as Stroke[]
-  );
-  const layers = useStorage(
-    (root) => [...root.layers] as unknown as Layer[]
-  );
+  // Readonly snapshots — shapes are identical to our types so casts are safe.
+  const strokes = useStorage((root) => [...root.strokes] as unknown as Stroke[]);
+  const layers = useStorage((root) => [...root.layers] as unknown as Layer[]);
+
+  // ── Mutations ────────────────────────────────────────────────────────────
 
   const commitStroke = useMutation(({ storage }, stroke: Stroke) => {
     storage.get("strokes").push(new LiveObject(stroke));
   }, []);
 
-  // Exposed so Canvas.tsx can call it after a resize clears the pixel buffer.
+  const eraseStrokes = useMutation(({ storage }, ids: string[]) => {
+    const list = storage.get("strokes");
+    // Iterate backwards so deletions don't shift subsequent indices.
+    for (let i = list.length - 1; i >= 0; i--) {
+      const item = list.get(i);
+      if (item && ids.includes(item.get("id") as string)) list.delete(i);
+    }
+  }, []);
+
+  const commitMove = useMutation(
+    ({ storage }, id: string, dx: number, dy: number) => {
+      storage.get("strokes").forEach((item) => {
+        if ((item.get("id") as string) !== id) return;
+        const pts = item.get("points") as unknown as Point[];
+        item.set("points", pts.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })));
+      });
+    },
+    []
+  );
+
+  const deleteStroke = useMutation(({ storage }, id: string) => {
+    const list = storage.get("strokes");
+    for (let i = 0; i < list.length; i++) {
+      const item = list.get(i);
+      if (item && (item.get("id") as string) === id) { list.delete(i); break; }
+    }
+  }, []);
+
+  // ── Redraw ───────────────────────────────────────────────────────────────
+  // Exposed so Canvas.tsx can trigger it after a resize empties the pixel buffer.
+
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx || !strokes || !layers) return;
     clearCanvas(ctx, canvas.width, canvas.height);
-    if (strokes && layers) drawStrokes(ctx, strokes, layers);
+    drawStrokes(ctx, strokes, layers);
+    // Overlay the selection box for the current selection (if any).
+    const sel = selectedStrokeRef.current;
+    if (sel) {
+      const live = strokes.find((s) => s.id === sel.id);
+      if (live) drawSelectionBox(ctx, live);
+    }
   }, [canvasRef, strokes, layers]);
 
-  // Redraw whenever Liveblocks storage changes.
   useEffect(() => { redraw(); }, [redraw]);
 
+  // ── Keyboard: Delete / Backspace removes selected stroke ─────────────────
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const sel = selectedStrokeRef.current;
+      if (!sel) return;
+      deleteStroke(sel.id);
+      selectedStrokeRef.current = null;
+      updatePresence({ selectedStrokeId: null });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [deleteStroke, updatePresence]);
+
+  // ── Utilities ────────────────────────────────────────────────────────────
+
   const getPoint = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>): Point => {
+    (e: React.PointerEvent<HTMLCanvasElement>): Point => {
       const rect = canvasRef.current!.getBoundingClientRect();
       return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     },
     [canvasRef]
   );
 
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const isActiveLocked = useCallback(
+    () => layers?.find((l) => l.id === layerId)?.locked ?? false,
+    [layers, layerId]
+  );
+
+  // ── Pointer down ─────────────────────────────────────────────────────────
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      // Capture so pointermove/up fire even if the pointer leaves the element.
+      e.currentTarget.setPointerCapture(e.pointerId);
+      const point = getPoint(e);
+      lastPointerRef.current = point;
+
+      if (tool === "pen") {
+        if (isActiveLocked()) return;
+        isDrawingRef.current = true;
+        currentPointsRef.current = [point];
+
+      } else if (tool === "eraser") {
+        isDrawingRef.current = true;
+        eraserPointsRef.current = [point];
+
+      } else if (tool === "select") {
+        if (!strokes || !layers) return;
+        const found = findStrokeAtPoint(point, strokes, layers);
+        selectedStrokeRef.current = found;
+        updatePresence({ selectedStrokeId: found?.id ?? null });
+        dragStartRef.current = found ? point : null;
+        redraw();
+      }
+    },
+    [tool, getPoint, isActiveLocked, strokes, layers, updatePresence, redraw]
+  );
+
+  // ── Pointer move ─────────────────────────────────────────────────────────
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
       const point = getPoint(e);
       updatePresence({ cursor: point });
+      lastPointerRef.current = point;
 
-      if (!isDrawing.current || tool !== "pen") return;
-
-      currentPoints.current.push(point);
-
-      // Re-render committed strokes + in-progress stroke each frame.
       const canvas = canvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      clearCanvas(ctx, canvas.width, canvas.height);
-      if (strokes && layers) drawStrokes(ctx, strokes, layers);
-      drawLiveStroke(ctx, currentPoints.current, color, strokeWidth, opacity);
-    },
-    [getPoint, updatePresence, tool, canvasRef, strokes, layers, color, strokeWidth, opacity]
-  );
+      const ctx = canvas?.getContext("2d");
 
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (tool !== "pen") return;
-      isDrawing.current = true;
-      currentPoints.current = [getPoint(e)];
-    },
-    [tool, getPoint]
-  );
+      if (tool === "pen") {
+        if (!isDrawingRef.current || !ctx || !canvas) return;
+        currentPointsRef.current.push(point);
+        // Local preview — zero Liveblocks writes here.
+        clearCanvas(ctx, canvas.width, canvas.height);
+        if (strokes && layers) drawStrokes(ctx, strokes, layers);
+        drawLiveStroke(ctx, currentPointsRef.current, color, strokeWidth, opacity);
 
-  const handleMouseUp = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (!isDrawing.current) return;
-      isDrawing.current = false;
+      } else if (tool === "eraser") {
+        if (!isDrawingRef.current || !ctx || !canvas) return;
+        eraserPointsRef.current.push(point);
+        // Redraw all strokes plus a small eraser circle as visual feedback.
+        clearCanvas(ctx, canvas.width, canvas.height);
+        if (strokes && layers) drawStrokes(ctx, strokes, layers);
+        ctx.save();
+        ctx.strokeStyle = "#94a3b8";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, Math.max(strokeWidth / 2, 6), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
 
-      const points = currentPoints.current;
-      if (points.length < 2) {
-        currentPoints.current = [];
-        return;
+      } else if (tool === "select") {
+        const sel = selectedStrokeRef.current;
+        if (!sel || !dragStartRef.current || !ctx || !canvas) return;
+        if (!strokes || !layers) return;
+        const dx = point.x - dragStartRef.current.x;
+        const dy = point.y - dragStartRef.current.y;
+        // Preview: draw everything except the selected stroke, then draw it moved.
+        clearCanvas(ctx, canvas.width, canvas.height);
+        drawStrokes(ctx, strokes.filter((s) => s.id !== sel.id), layers);
+        const movedPoints = sel.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy }));
+        drawLiveStroke(ctx, movedPoints, sel.color, sel.width, sel.opacity);
+        drawSelectionBox(ctx, { ...sel, points: movedPoints });
       }
-
-      // Only here do we write to Liveblocks.
-      commitStroke({
-        id: nanoid(),
-        userId: "",
-        layerId,
-        color,
-        width: strokeWidth,
-        opacity,
-        points,
-        createdAt: Date.now(),
-      });
-
-      currentPoints.current = [];
     },
-    [commitStroke, layerId, color, strokeWidth, opacity]
+    [tool, getPoint, updatePresence, canvasRef, strokes, layers, color, strokeWidth, opacity]
   );
 
-  const handleMouseLeave = useCallback(() => {
+  // ── Pointer up ───────────────────────────────────────────────────────────
+
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const point = getPoint(e);
+
+      if (tool === "pen") {
+        if (!isDrawingRef.current) return;
+        isDrawingRef.current = false;
+        const points = [...currentPointsRef.current];
+        currentPointsRef.current = [];
+        if (points.length < 2) return;
+        // Single write to Liveblocks for the entire stroke.
+        commitStroke({
+          id: nanoid(),
+          userId: "",
+          layerId,
+          color,
+          width: strokeWidth,
+          opacity,
+          points,
+          createdAt: Date.now(),
+        });
+
+      } else if (tool === "eraser") {
+        if (!isDrawingRef.current) return;
+        isDrawingRef.current = false;
+        const eraserPoints = [...eraserPointsRef.current];
+        eraserPointsRef.current = [];
+        if (!strokes || !layers || eraserPoints.length === 0) return;
+        const eraserBox = getPathBoundingBox(eraserPoints);
+        const ids = strokes
+          .filter((s) => {
+            const layer = layers.find((l) => l.id === s.layerId);
+            // Only erase strokes on visible, non-locked layers.
+            if (!layer?.visible || layer.locked) return false;
+            return doesBoundingBoxIntersect(eraserBox, getStrokeBoundingBox(s));
+          })
+          .map((s) => s.id);
+        if (ids.length > 0) eraseStrokes(ids);
+
+      } else if (tool === "select") {
+        const sel = selectedStrokeRef.current;
+        if (!sel || !dragStartRef.current) return;
+        const dx = point.x - dragStartRef.current.x;
+        const dy = point.y - dragStartRef.current.y;
+        dragStartRef.current = null;
+        // Only write if there was meaningful movement and the layer isn't locked.
+        if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+        const layer = layers?.find((l) => l.id === sel.layerId);
+        if (layer?.locked) return;
+        // Single grouped mutation.
+        commitMove(sel.id, dx, dy);
+        // Update the ref so subsequent redraws show the selection box correctly.
+        selectedStrokeRef.current = {
+          ...sel,
+          points: sel.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })),
+        };
+      }
+    },
+    [
+      tool, getPoint, commitStroke, layerId, color, strokeWidth, opacity,
+      strokes, layers, eraseStrokes, commitMove,
+    ]
+  );
+
+  // ── Pointer leave ────────────────────────────────────────────────────────
+
+  const handlePointerLeave = useCallback(() => {
     updatePresence({ cursor: null });
   }, [updatePresence]);
 
-  return { handleMouseDown, handleMouseMove, handleMouseUp, handleMouseLeave, redraw };
+  return {
+    handlePointerDown,
+    handlePointerMove,
+    handlePointerUp,
+    handlePointerLeave,
+    redraw,
+  };
 }

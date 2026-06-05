@@ -30,10 +30,10 @@ export default function Canvas({
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const {
-    handleMouseDown,
-    handleMouseMove,
-    handleMouseUp,
-    handleMouseLeave,
+    handlePointerDown,
+    handlePointerMove,
+    handlePointerUp,
+    handlePointerLeave,
     redraw,
   } = useCanvas(canvasRef, { layerId, tool, color, strokeWidth, opacity });
 
@@ -77,10 +77,10 @@ export default function Canvas({
         ref={canvasRef}
         className="absolute inset-0 touch-none"
         style={{ cursor: CURSOR[tool] }}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerLeave={handlePointerLeave}
       />
 
       {/* SVG overlay renders other users' cursors; pointer-events: none in CursorOverlay */}
