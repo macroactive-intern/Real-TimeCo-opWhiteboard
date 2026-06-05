@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback } from "react";
-import { useUpdateMyPresence } from "../../liveblocks.config";
 import { useUndoRedo } from "@/hooks/useUndoRedo";
 import type { ToolType } from "@/types/whiteboard";
 
@@ -33,23 +32,16 @@ export default function Toolbar({
   onOpacityChange,
   onExportSvg,
 }: ToolbarProps) {
-  const updatePresence = useUpdateMyPresence();
   const { undo, redo, canUndo, canRedo } = useUndoRedo();
 
   const handleToolChange = useCallback(
-    (t: ToolType) => {
-      updatePresence({ tool: t });
-      onToolChange(t);
-    },
-    [updatePresence, onToolChange]
+    (t: ToolType) => onToolChange(t),
+    [onToolChange]
   );
 
   const handleColorChange = useCallback(
-    (c: string) => {
-      updatePresence({ color: c });
-      onColorChange(c);
-    },
-    [updatePresence, onColorChange]
+    (c: string) => onColorChange(c),
+    [onColorChange]
   );
 
   return (

@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { useStorage } from "../../liveblocks.config";
+import { useStorage, useUpdateMyPresence } from "../../liveblocks.config";
 import { exportStrokesToSvg, downloadSvg } from "@/lib/canvas/svgExport";
+import { useToolShortcuts } from "@/hooks/useToolShortcuts";
 import Canvas from "./Canvas";
 import Toolbar from "./Toolbar";
 import LayerPanel from "./LayerPanel";
@@ -19,8 +20,24 @@ export default function Whiteboard() {
   // Used to read pixel dimensions at export time without needing a prop tunnel.
   const canvasAreaRef = useRef<HTMLDivElement>(null);
 
+  const updatePresence = useUpdateMyPresence();
+
   const strokes = useStorage((root) => [...root.strokes] as unknown as Stroke[]);
   const layers = useStorage((root) => [...root.layers] as unknown as Layer[]);
+
+  // Presence is synced here so both click (Toolbar) and keyboard share one path.
+  const handleToolChange = useCallback((t: ToolType) => {
+    setTool(t);
+    updatePresence({ tool: t });
+  }, [updatePresence]);
+
+  const handleColorChange = useCallback((c: string) => {
+    setColor(c);
+    updatePresence({ color: c });
+  }, [updatePresence]);
+
+  // P / E / V tool shortcuts — same guard logic as other keyboard handlers.
+  useToolShortcuts(handleToolChange);
 
   const handleExportSvg = useCallback(() => {
     if (!strokes || !layers) return;
@@ -40,8 +57,8 @@ export default function Whiteboard() {
           color={color}
           strokeWidth={strokeWidth}
           opacity={opacity}
-          onToolChange={setTool}
-          onColorChange={setColor}
+          onToolChange={handleToolChange}
+          onColorChange={handleColorChange}
           onStrokeWidthChange={setStrokeWidth}
           onOpacityChange={setOpacity}
           onExportSvg={handleExportSvg}

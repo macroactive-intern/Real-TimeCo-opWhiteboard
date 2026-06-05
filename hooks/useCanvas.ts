@@ -111,13 +111,15 @@ export function useCanvas(
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       const sel = selectedStrokeRef.current;
       if (!sel) return;
+      const layer = layers?.find((l) => l.id === sel.layerId);
+      if (layer?.locked) return;
       deleteStroke(sel.id);
       selectedStrokeRef.current = null;
       updatePresence({ selectedStrokeId: null });
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [deleteStroke, updatePresence]);
+  }, [deleteStroke, updatePresence, layers]);
 
   // ── Utilities ────────────────────────────────────────────────────────────
 
