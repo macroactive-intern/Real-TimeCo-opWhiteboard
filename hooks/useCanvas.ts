@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useCallback, useEffect, useLayoutEffect, RefObject } from "react";
+import { useHistory } from "@liveblocks/react";
 import { useUpdateMyPresence, useMutation, useStorage } from "../liveblocks.config";
 import { LiveObject } from "@liveblocks/client";
 import {
@@ -40,6 +41,7 @@ export function useCanvas(
   const dragStartRef = useRef<Point | null>(null);
   const eraserPointsRef = useRef<Point[]>([]);
 
+  const history = useHistory();
   const updatePresence = useUpdateMyPresence();
 
   // Readonly snapshots — shapes are identical to our types so casts are safe.
@@ -251,7 +253,12 @@ export function useCanvas(
             return doesBoundingBoxIntersect(eraserBox, getStrokeBoundingBox(s));
           })
           .map((s) => s.id);
-        if (ids.length > 0) eraseStrokes(ids);
+        // Wrap in pause/resume so all deletes form one undo entry.
+        if (ids.length > 0) {
+          history.pause();
+          eraseStrokes(ids);
+          history.resume();
+        }
 
       } else if (tool === "select") {
         const sel = selectedStrokeRef.current;
@@ -263,8 +270,10 @@ export function useCanvas(
         if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
         const layer = layers?.find((l) => l.id === sel.layerId);
         if (layer?.locked) return;
-        // Single grouped mutation.
+        // Wrap in pause/resume so the move is one undo entry.
+        history.pause();
         commitMove(sel.id, dx, dy);
+        history.resume();
         // Update the ref so subsequent redraws show the selection box correctly.
         selectedStrokeRef.current = {
           ...sel,
@@ -274,7 +283,7 @@ export function useCanvas(
     },
     [
       tool, getPoint, commitStroke, layerId, color, strokeWidth, opacity,
-      strokes, layers, eraseStrokes, commitMove,
+      strokes, layers, eraseStrokes, commitMove, history,
     ]
   );
 
